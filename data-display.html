@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Data Extraction and Display</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .form-container, .status-container, .table-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        input, select, button {
+            padding: 10px;
+            margin: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .loading {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <h1>API Data Extraction</h1>
+    <div class="form-container">
+        <h2>Enter API Key and Batch ID</h2>
+        <input type="text" id="apiKey" placeholder="Enter API Key" style="width: 300px;">
+        <input type="text" id="batchId" placeholder="Enter Batch ID" style="width: 300px;">
+        <button onclick="fetchData()">Fetch Data</button>
+    </div>
+    <div class="form-container" id="filterContainer" style="display: none;">
+        <h2>Filter Data</h2>
+        <select id="deptFilter">
+            <option value="">Select Department</option>
+        </select>
+        <button onclick="applyFilter()">Filter</button>
+    </div>
+    <div class="status-container">
+        <h2>Status</h2>
+        <div id="status" class="status"></div>
+    </div>
+    <div class="table-container" id="tableContainer" style="display: none;">
+        <h2>Hospital Data</h2>
+        <table id="dataTable">
+            <thead>
+                <tr>
+                    <th>Serial No.</th>
+                    <th>Department</th>
+                    <th>Patient Name</th>
+                    <th>Age</th>
+                    <th>Gender</th>
+                    <th>Address</th>
+                    <th>District</th>
+                    <th>Phone</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        let apiKey = '';
+        let batchId = '';
+        let extractionIds = [];
+        let mergedHospitalData = [];
+        let uniqueDepts = [];
+
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        async function fetchData() {
+            apiKey = document.getElementById('apiKey').value.trim();
+            batchId = document.getElementById('batchId').value.trim();
+
+            if (!apiKey || !batchId) {
+                updateStatus('Please enter both API Key and Batch ID.', 'error');
+                return;
+            }
+
+            updateStatus('Fetching batch data...', 'loading');
+            const batchUrl = `https://api.sensible.so/v0/extract/batch/${batchId}`;
+            const headers = new Headers();
+            headers.append('Authorization', `Bearer ${apiKey}`);
+
+            try {
+                const batchResponse = await fetch(batchUrl, {
+                    method: 'GET',
+                    headers: headers,
+                    redirect: 'follow'
+                });
+
+                if (batchResponse.status !== 200) {
+                    updateStatus(`Batch API Error: ${batchResponse.status} - ${await batchResponse.text()}`, 'error');
+                    return;
+                }
+
+                const batchData = await batchResponse.json();
+                extractionIds = batchData.extraction_ids || [];
+                updateStatus(`Retrieved ${extractionIds.length} extraction IDs. Fetching document data...`, 'success');
+
+                await fetchDocuments();
+            } catch (error) {
+                updateStatus(`Batch API Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function fetchDocuments() {
+            mergedHospitalData = [];
+            const headers = new Headers();
+            headers.append('Authorization', `Bearer ${apiKey}`);
+
+            for (let i = 0; i < extractionIds.length; i++) {
+                const docId = extractionIds[i];
+                updateStatus(`Fetching document ${i + 1}/${extractionIds.length} (ID: ${docId})...`, 'loading');
+
+                try {
+                    const docResponse = await fetch(`https://api.sensible.so/v0/documents/${docId}`, {
+                        method: 'GET',
+                        headers: headers,
+                        redirect: 'follow'
+                    });
+
+                    if (docResponse.status !== 200) {
+                        updateStatus(`Document API Error for ID ${docId}: ${docResponse.status} - ${await docResponse.text()}`, 'error');
+                        continue;
+                    }
+
+                    const docData = await docResponse.json();
+                    const hospitalData = docData.parsed_document?.mkg_hospital || [];
+                    mergedHospitalData.push(...hospitalData);
+                    updateStatus(`Fetched document ${i + 1}/${extractionIds.length} successfully.`, 'success');
+                } catch (error) {
+                    updateStatus(`Document API Error for ID ${docId}: ${error.message}`, 'error');
+                }
+            }
+
+            populateDeptFilter();
+            displayTable(mergedHospitalData);
+        }
+
+        function populateDeptFilter() {
+            const deptFilter = document.getElementById('deptFilter');
+            uniqueDepts = [...new Set(mergedHospitalData.map(item => item.dept_Name?.value).filter(value => value))];
+            deptFilter.innerHTML = '<option value="">Select Department</option>';
+            uniqueDepts.forEach(dept => {
+                const option = document.createElement('option');
+                option.value = dept;
+                option.textContent = dept;
+                deptFilter.appendChild(option);
+            });
+            document.getElementById('filterContainer').style.display = 'block';
+        }
+
+        function applyFilter() {
+            const selectedDept = document.getElementById('deptFilter').value;
+            if (!selectedDept) {
+                updateStatus('Please select a department to filter.', 'error');
+                return;
+            }
+            const filteredData = mergedHospitalData.filter(item => item.dept_Name?.value === selectedDept);
+            displayTable(filteredData);
+            updateStatus(`Displayed ${filteredData.length} records for department "${selectedDept}".`, 'success');
+        }
+
+        function displayTable(data) {
+            const tableBody = document.getElementById('tableBody');
+            tableBody.innerHTML = '';
+            if (data.length === 0) {
+                updateStatus('No data found for the selected department.', 'error');
+                return;
+            }
+            data.forEach((item, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${item.dept_Name?.value || ''}</td>
+                    <td>${item.pt_name?.value || ''}</td>
+                    <td>${item.age?.value || ''}</td>
+                    <td>${item.gender?.value || ''}</td>
+                    <td>${item.address?.value || ''}</td>
+                    <td>${item.dist?.value || ''}</td>
+                    <td>${item.phone?.value || ''}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+            document.getElementById('tableContainer').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
